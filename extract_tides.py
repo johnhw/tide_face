@@ -1,165 +1,110 @@
-import json, os, math 
+import json, math
 import click, time 
+from textwrap import dedent
+import re
+import matplotlib.pyplot as plt
+import numpy as np
+import random
+from scipy.optimize import curve_fit
+from dump_tides import dump_station, dump_station_years
+from predict_tide import find_tide_event, find_tide_events
 
+def node_curve(x, frequency, amplitude, phase, offset):
+    return amplitude * np.sin(frequency * x + phase) + offset
 
-def predict_tide(t, constituents, station, d=0, epoch_year=None):
-    """Predict the tide at a given time t, using the constituents
-    and station data"""
-    def unpack_tz(tz):
-        return tz//100, tz%100
+def equilibrium_curve(x, increment, frequency, amplitude, phase):
+    return amplitude * np.arctan(np.cos(frequency * x + phase), np.sin(frequency*x+phase)) + increment * x
 
-    def epoch(year):
-        """Return the Unix time at the start of the year"""
-        return time.mktime((year, 1, 1, 0, 0, 0, 0, 0, 0))
+def fit_sin(tt, yy):
+    '''Fit sin to the input time sequence, and return fitting parameters "amp", "omega", "phase", "offset", "freq", "period" and "fitfunc"'''
+    tt = np.array(tt)
+    yy = np.array(yy)
+    ff = np.fft.fftfreq(len(tt), (tt[1]-tt[0]))   # assume uniform spacing
+    Fyy = abs(np.fft.fft(yy))
+    guess_freq = abs(ff[np.argmax(Fyy[1:])+1])   # excluding the zero frequency "peak", which is related to offset
+    guess_amp = np.std(yy) * 2.**0.5
+    guess_offset = np.mean(yy)
+    guess = np.array([guess_amp, 2.*np.pi*guess_freq, 0., guess_offset])
 
-    def rads_per_second(degrees_per_hour):
-        return math.radians(degrees_per_hour/3600)
+    def sinfunc(t, A, w, p, c):  return A * np.sin(w*t + p) + c
+    popt, pcov = curve_fit(sinfunc, tt, yy, p0=guess)
+    A, w, p, c = popt
+    f = w/(2.*np.pi)
+    fitfunc = lambda t: A * np.sin(w*t + p) + c
+    return {"amp": A, "omega": w, "phase": p, "offset": c, "freq": f, "period": 1./f, "fitfunc": fitfunc, "maxcov": np.max(pcov), "rawres": (guess,popt,pcov)}
+
+def analyse_constituents(constituents):
+    # plot the data
+    for constituent in constituents:        
+        print(constituent)
+        nodes = [constituents[constituent]["years"][k]["node_factor"] for k in constituents[constituent]["years"]]
+        ph_shift = [constituents[constituent]["speed"] * (24 * 365.25) for _ in constituents[constituent]["years"]] 
+        eqs = [constituents[constituent]["years"][k]["equilibrium"] for k in constituents[constituent]["years"]]
+        fig, ax = plt.subplots(2,1, figsize=(24,12))
+        corrections = []
+        while np.mean(np.abs(nodes))>0.05 and len(corrections)<3:
+            node_fit = fit_sin(np.array(range(len(nodes))), np.array(nodes))
+            
+            ax[0].plot(nodes - np.mean(nodes), label=constituent)
+            nodes = nodes - node_fit["fitfunc"](np.array(range(len(nodes))))
+            ax[0].plot(nodes - np.mean(nodes), label=constituent)
+            print(f"Avg. residual: {np.mean(np.abs(nodes))}")
+            corrections.append({"amp":node_fit["amp"], "phase":node_fit["phase"], "freq":node_fit["freq"], "offset":node_fit["offset"]})
+        
+        ph_shift = np.array(ph_shift)                 
+        prad = np.unwrap(np.radians(np.array(eqs)-np.array(ph_shift)%360))
+        mean_shift = np.mean(np.diff(prad))        
+
+        prad = prad - mean_shift * np.arange(len(prad))
+        prad = prad - np.mean(prad)
+        print(mean_shift)
+        ax[1].plot(prad, label="phase")        
+        ax[1].axhline(0, color="black")
+        
+        
+        fig.savefig(f"node_{constituent}.png")
+
     
-    # get the epoch (start of year, 1st Jan) for the year this is in
-    if epoch_year is None:
-        year = time.gmtime(t)[0]
-    else:
-        year = epoch_year
-    t = t - epoch(year)    
-    deriv_shift = (math.pi / 2) * d
-    # compute how many seconds to add to the phase
-    hour, min = unpack_tz(station["zone_offset"])    
-    time_shift = (hour * 3600 + min * 60)      
-    tide = station["offset"]
-    for k, v in station["constituents"].items():
-        base = constituents[k]
-        year_constituents = base["years"][str(year)]
-        speed = rads_per_second(base["speed"])        
-        amp = v["amp"] * year_constituents["node_factor"]        
-        phase = math.radians(year_constituents["equilibrium"]-v["phase"]) 
-        term = amp * math.cos(speed * (t - time_shift) + phase + deriv_shift)                
-        tide += term * (speed ** d) # chain rule
-    # convert to meters if required 
-    if station["units"]=="feet":
-        tide *= 0.3048
-    return tide 
-
-def compute_error_for_year(station, constituents, year, min_year):
-    # iterate over each hour in the year
-    error = 0
-    t = time.mktime((year, 1, 1, 0, 0, 0, 0, 0, 0))
-    for hour in range(0, 365*24):
-        t = t + 3600
-        tide = predict_tide(t, constituents, station)        
-        tide2 = predict_tide(t, constituents, station, epoch_year=min_year)
-        error += abs(tide - tide2)
-    return error / (365*24)
-
-def quantize(val, quantize):
-    max_val, step = quantize
-    return math.floor((val / max_val) / step) * step * max_val
-
-import copy
-def round_station(station, min_amp, quantize_amp, quantize_phase):
-    """Round the amplitude and phase of the constituents"""
-    amp_phase = {}
-    count_zero = 0
-    station = copy.deepcopy(station)
-    for c_name in station["constituents"]:
-        amp = quantize(station["constituents"][c_name]["amp"], quantize_amp)
-        epoch = quantize(station["constituents"][c_name]["phase"], quantize_phase)
-        if amp<min_amp:
-            amp = 0
-            count_zero += 1
-        amp_phase[c_name] = {"amp":amp, "phase":epoch}    
-    station["constituents"] = amp_phase
-    print(f"Zeroed {count_zero} constituents of {len(station['constituents'])}, remaining: {len(station['constituents'])-count_zero}")
-    return station
-
-def round_constituents(constituents, quantize_amp, quantize_phase, quantize_speed):
-    """Round the amplitude and phase of the constituents"""
-    amp_phase = {}
-    constituents = copy.deepcopy(constituents)
-    for c_name in constituents:
-        speed = quantize(constituents[c_name]["speed"], quantize_speed)
-        constituents[c_name]["speed"] = speed
-        years = constituents[c_name]["years"]
-        for year in years:
-            node_factor = quantize(years[year]["node_factor"], quantize_amp)
-            equilibrium = quantize(years[year]["equilibrium"], quantize_phase)
-            years[year] = {"node_factor":node_factor, "equilibrium":equilibrium}
-        constituents[c_name]["years"] = years        
-    return constituents
-
-def compute_error_quantize(station, constituents, year, min_amp=1e-3, quantize_amp=(4,1e-3), quantize_phase=(361,1e-3), quantize_speed=(0.005, 1e-3)):
-    error = 0
-    t = time.mktime((year, 1, 1, 0, 0, 0, 0, 0, 0))
-    q_station = round_station(station, min_amp, quantize_amp, quantize_phase)
-    q_constituents = round_constituents(constituents, quantize_amp, quantize_phase, quantize_speed)
-    for hour in range(0, 365*24):
-        t = t + 3600
-        tide = predict_tide(t, constituents, station)
-        tide2 = predict_tide(t, q_constituents, q_station)
-        error += abs(tide - tide2)
-    return error / (365*24)
-
-def compute_error(station, constituents, min_year, max_year):
-    """Compare the error in the tide prediction for a station
-    when the constituents are used for the year they were measured
-    and when they are used for the year they are being predicted for"""
-
-    for year in range(min_year, max_year):
-        error = compute_error_for_year(station, constituents, year, min_year)
-        print(f"{station['name']} {year} {error}")
-    
-
-
 
 
 station_fields = {"latitude":"lat", "longitude":"lon", "name":"name", "station_id":"id", "zone_offset":"zone_offset", "datum_offset":"offset", "level_units":"units"}
+
+# extract type 2 records (reference stations with offsets)
 @click.command()
 @click.argument("input_file", type=click.Path(exists=True))
 @click.option("--min-amplitude", type=float, default=1e-3, help="Minimum amplitude to include in output")
 @click.option("--station", type=str, default=None, help="Station to extract")
-def cli(input_file, station, min_amplitude=1e-3):
+@click.option("--year", type=int, default=None, help="Year to extract")
+def cli(input_file, station, year, min_amplitude):    
     """This script extracts tidal data form a TCD converted JSON file"""
+    if year is None:
+        year = time.gmtime()[0]
+        print(f"Using current year {year}")
+
+    station_name = station
     with open(input_file, "r") as f:
         data = json.load(f)
     stations = data["tide_records"]
-    all_stations = []
-    station_name = station
     constituents = {}
-    c_names = []
     
     for constituent in data["constituents"]:
         name = constituent["constituent_name"]
         constituents[name] = ({"speed":constituent["speed"], "n":constituent["constituent_number"], "name":name, "years":constituent["years"]})
-        c_names.append(name)
+
     
-    speeds = [constituents[c_name]["speed"] for c_name in constituents]
-    print("Max speed", max(speeds))
-    min_year = 2023
-    max_year = 2100
+    #analyse_constituents(constituents)
+            
     for station in stations:
         # only process type 1 for now
-        if station["record_type"] == 1:# and station["name"].startswith(station_name):
-            amp_phase = {}
-            for c_name, amp, epoch in zip(c_names, station["amplitude"], station["epoch"]):                            
-                amp_phase[c_name] = {"amp":amp, "phase":epoch}
+        if station["record_type"] == 1 and station["name"].startswith(station_name):            
             station_data = {v:station[k] for k,v in station_fields.items()}        
-            station_data["constituents"] = amp_phase
-            min_amp = 3e-2 
-            quantize_amp = (2, 0.00002)
-            quantize_phase = (360, 0.00002)
-            quantize_speed = (180, 0.00002**2)
-
-            # #compute_error(station_data, constituents, min_year, max_year)
-            # for min_amp in [1e-4, 1e-3, 1e-2, 1.5e-2]:
-            #     for quantize_amp in [(2, 0.00002)]:
-            #         quantize_phase = (360, 0.00002)
-            #         quantize_speed = (180, 0.00002**2)
-            #         #for quantize_phase in [(361,1e-3), (361,1e-2), (361,1e-1), (361,1e-0)]:
-            #             #for quantize_speed in [(0.005, 1e-3), (0.005, 1e-2), (0.005, 1e-1), (0.005, 1e-0)]:
-            error = compute_error_quantize(station_data, constituents, 2023, min_amp, quantize_amp, quantize_phase, quantize_speed)
-            print(f"{station['name']} {min_amp} {quantize_amp} {quantize_phase} {quantize_speed} {error}")
-                    
-         
+            station_data["constituents"] = {c_name:{"amp":amp, "phase":epoch} for c_name, amp, epoch in zip(constituents.keys(), station["amplitude"], station["epoch"])}                        
+            #dump_station_years(station_data, year, year+5, constituents, min_amplitude)   
+            for h, t, l in find_tide_events(time.time(), 5, constituents, station_data):
+                print(f"{'HW' if h else 'LW'}\t{time.asctime(time.localtime(t))}\t{l:3.2f}m")      
+            
     
+
 
 if __name__=="__main__":
     cli()
