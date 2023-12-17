@@ -7,6 +7,8 @@
 #include <string.h>
 #include <time.h>
 
+#include "tide_data.c"
+
 time_t make_time(uint32_t year, uint32_t month, uint32_t day, uint32_t hour, uint32_t minute, uint32_t second) {
     struct tm tm;
     tm.tm_year = year - 1900;
@@ -29,7 +31,7 @@ float predict_tide(uint32_t t, tidal *station, int d) {
         float speed = UNQUANTIZE_SPEED(station->speeds[i]);
         float amp = UNQUANTIZE_AMP(station->amps[i]);
         float phase = UNQUANTIZE_PHASE(station->phases[i]);
-        float term = amp * cosf(speed * t + phase);
+        float term = amp * cosf(speed * t + phase + phase_shift);
         term = d>0 ? term * powf(speed, d) : term;
         tide += term;
     }
@@ -49,22 +51,36 @@ void test_tides(tidal *station, time_t *times, float *levels) {
     }
 }
 
+/* Case insensitive string comparison */
+int insenstive_is_prefix(char *s1, char *s2) {
+    while (*s1 && *s2) {
+        if (tolower(*s1) != tolower(*s2)) return 0;
+        s1++;
+        s2++;
+    }
+    return *s1 == '\0';
+}
+
 /* Search the registry for a given station name and best-matching year. */
 tidal *find_tidal_station(char *name, int year) {
     tidal *station = tidal_stations;
     tidal *best_station = NULL;
-    int best_year = 0;
+    int best_year = 0;    
+    int match;
+    
     while (station != NULL) {
-        if (strcmp(station->name, name) == 0){
+        match = insenstive_is_prefix(name, station->name);
+        if (match) {
             /* Exact match */
             if(station->year == year) {
                 return station;
-            }
+            }            
             else
-            {
+            {                
                 /* Possible year match */
                 if(abs(station->year - year) < abs(best_year - year)) {
                     best_year = station->year;
+                    best_station = station;
                 }
             }
         }
@@ -107,8 +123,7 @@ void find_tide_event_near(tidal *station, tidal_event *event, time_t t0, time_t 
         {
             t0 = t;
         }
-    }          
-    
+    }              
     /* Refine the event time */
     t_d = predict_tide(t, station, 1);
     t_d2 = predict_tide(t, station, 2);
@@ -117,94 +132,194 @@ void find_tide_event_near(tidal *station, tidal_event *event, time_t t0, time_t 
         t = t - t_d / t_d2;
         t_d = predict_tide(t, station, 1);
         t_d2 = predict_tide(t, station, 2);
-    }
-    
+    }    
     /* Populate the event */
     event->time = t;
     event->level = predict_tide(t, station, 0);
     event->type = (t_d2<0) ? TIDE_HIGH : TIDE_LOW;    
 }
 
+/* Remove all events from the event list */
+void clear_tide_events(tidal_event *events)
+{
+    for(int i=0;i<MAX_TIDE_EVENTS;i++)
+    {
+        events[i].type = TIDE_NONE;
+        events[i].time = 0;
+        events[i].level = 0.0;
+    }
+}
+
+void add_tide_event(tidal *station, time_t t, tidal_event *event, tidal_event *events)
+{
+    int i;
+    /* Find the first empty slot */
+    for(i=0;i<MAX_TIDE_EVENTS;i++) if(events[i].type==TIDE_NONE) break;
+    /* If the list is full, we can't add any more events */
+    if(i==MAX_TIDE_EVENTS) return;
+    /* Find the event near t */
+    find_tide_event_near(station, event, t-1800, t+1800);
+    /* If the event is outside the range, we can't add it */
+    if(event->type==TIDE_NONE) return;
+    /* If the event is a duplicate (or a near duplicate), we don't add it */
+    for(int j=0;j<i;j++) if(abs(events[j].time-event->time)<MIN_EVENT_GAP_SECONDS) return;
+    /* Add the event */
+    events[i] = *event;
+    /* Sort the list */
+    for(int j=0;j<i;j++) for(int k=j+1;k<i;k++) if(events[j].time>events[k].time) {
+        tidal_event tmp = events[j];
+        events[j] = events[k];
+        events[k] = tmp;
+    }
+}
+
+
+void fill_day_tide_table(tidal_event *events, float *levels, tidal *station, time_t t0)    
+{
+    tidal_event event;
+    /* Clear all events */
+    clear_tide_events(events);
+    /* Get the level, and any event in that hour */
+    for(int i=0; i<24; i++) {
+        levels[i] = predict_tide(t0, station, 0);
+        add_tide_event(station, t0, &event, events);
+        t0 += 3600;
+    }
+}
+
 void populate_tide_table(tide_table *table, tidal *station, time_t base_time, int tz_hours, int tz_mins)
 {
-    int populate_today = 1;
-    int populate_yesterday = 1;
-    int populate_tomorrow = 1;
+    
     /* Get midnight UTC on the base day */
     struct tm *tm = gmtime(&base_time);
     tm->tm_hour = 0;
     tm->tm_min = 0;
     tm->tm_sec = 0;
     time_t midnight = mktime(tm);
+    
     /* adjust for time zone */
     midnight += (tz_hours * 60 * 60) + (tz_mins * 60);
     /* Already populated? */
     if(table->base_time==midnight && table->station==station) return;    
     /* Have we moved one day forwards? If so, copy what we can from the previous day */
-    if(table->station==station && table->base_time==midnight-86400) 
+    if(table->station==station && table->base_time==midnight-DAY_SECONDS) 
     {
         /* Shift the table back one day */
         for(int i=0; i<72; i++) table->levels[i] = table->levels[i+24];
-        for(int i=0; i<3; i++) for(int j=0; j<6; j++) table->events[i][j] = table->events[i][j+1];
-        populate_today = 0;     
-        populate_yesterday = 0;   
+        for(int i=0; i<3; i++) for(int j=0; j<MAX_TIDE_EVENTS; j++) table->events[i][j] = table->events[i][j+1];
+        fill_day_tide_table(table->events[2], table->levels+48, station, midnight+DAY_SECONDS);        
+        return;        
     }
     /* Have we moved one day backwards? If so, copy what we can from the next day */
-    if(table->station==station && table->base_time==midnight+86400) 
+    else if(table->station==station && table->base_time==midnight+DAY_SECONDS) 
     {
         /* Shift the table forward one day */
         for(int i=71; i>=0; i--) table->levels[i+24] = table->levels[i];
-        for(int i=2; i>=0; i--) for(int j=5; j>=0; j--) table->events[i][j+1] = table->events[i][j];
-        populate_today = 0;     
-        populate_tomorrow = 0;   
+        for(int i=2; i>=0; i--) for(int j=MAX_TIDE_EVENTS-1; j>=0; j--) table->events[i][j+1] = table->events[i][j];
+        fill_day_tide_table(table->events[0], table->levels, station, midnight-DAY_SECONDS);                
     }   
+
     /* Populate the levels table */
-    if(populate_yesterday) {
-        for(int i=0; i<24; i++) {
-            table->levels[i] = predict_tide(midnight - (86400 - (i*3600)), station, 0);
-        }
-        for(int i=0;i<6;i++)
-        {
-            find_events(&table->events[0], table->station, table->base_time, 0);
-        }
+    time_t t0 = midnight - DAY_SECONDS;
+    for(int i=0;i<3;i++)
+    {
+        fill_day_tide_table(table->events[i], table->levels+i*24, station, t0); 
+        t0 += DAY_SECONDS; 
     }
-    if(populate_today) {
-        for(int i=0; i<24; i++) {
-            table->levels[i+24] = predict_tide(midnight + (i*3600), station, 0);
-        }
-    }
-    if(populate_tomorrow) {
-        for(int i=0; i<24; i++) {
-            table->levels[i+48] = predict_tide(midnight + 86400 + (i*3600), station, 0);
-        }
-    }
+    table->base_time = midnight;
+    table->station = station;
 }    
+
+
+
     
-    
 
-/* Mean error for Millport, Scotland in 2023 is approximately 0.007m */
-char station_millport_scotland_2023_name [] = "Millport, Scotland";
-uint32_t station_millport_scotland_2023_speed [] = {0x12AAF606, 0x2555EC0E, 0x24A60275, 0x23F90BFA, 0x35F591F7, 0x47F217F5, 0x6BEB23EF, 0x234C157F, 0x229F1F05, 0x114E15F4, 0x1290DD21, 0x10A11F79, 0x129DE993, 0x253BD327, 0x4A77A64E, 0x252EC6DC, 0x248EDCAC, 0x22B644CD, 0x23633B48, 0x36A40202, 0x354721EE, 0x4745217A, 0x4934DF21, 0x267E9A54, 0x15CE013, 0xD0C72, 0x1A18E7, 0x6B3E2D75, 0x6D2DEB1C, 0x494EF809, 0x22094E53, 0x95D0B2, 0x25E8C9A2, 0x229C2BE6, 0x23DEF313, 0x37E6C92D, 0x2698B33B, 0x46982AFF};
-uint16_t station_millport_scotland_2023_amp [] = {0x28D, 0x259, 0x16A, 0x170E, 0x10B, 0x1C2, 0x78, 0x45B, 0x7A, 0x266, 0xD0, 0xCD, 0x3E, 0x63F, 0x47, 0x68, 0xB1, 0xBD, 0x123, 0x6B, 0x48, 0xB7, 0x1C2, 0x7F, 0x93, 0x229, 0x6B, 0x38, 0x86, 0xAD, 0x3A, 0x39, 0x60, 0x7E, 0x3C, 0x66, 0x55, 0x3B};
-uint16_t station_millport_scotland_2023_phase [] = {0x7B7F, 0x7055, 0x33B2, 0x7468, 0x512A, 0x9053, 0x6080, 0x4955, 0x202F, 0x455E, 0x73EC, 0x3379, 0x35DD, 0xE705, 0x784F, 0xF179, 0x42C5, 0x7C16, 0x2DDF, 0xD131, 0xA4CC, 0x5971, 0x13D8, 0xDC69, 0x88F8, 0x14AA, 0x18B2, 0x3542, 0xD6FE, 0x9D84, 0x4773, 0xFA24, 0x94B6, 0xCB, 0x734F, 0x3AD9, 0x685A, 0x2D77};
 
-time_t station_millport_scotland_2023_test_times [] = {1688733489, 1698423109, 1698360541, 1687568705, 1693003109, 1679821131, 1684479076, 1699263532, 1699967995, 1687201390, 1689060224, 1692971831, 1700226128, 1701322636, 1700936761, 1701520040, 1692759951, 1674802785, 1682440122, 1690990968, 1681331935, 1677307772, 1673856624, 1690003756, 1681227114, 1677898887, 1675074465, 1686124941, 1683428899, 1683977938, 1684449390, 1690815905};
-float station_millport_scotland_2023_test_tides [] = {2.0770579795316513, 0.7289970226823832, 3.3753250049152457, 2.4176665135849063, 1.3864594252890114, 0.5469748026215489, 1.1454070803474532, 2.022780886360471, 3.337170656850065, 0.8103458812880713, 2.9639036520031348, 1.7007211874326578, 3.0408539465248263, 1.4118233304974432, 1.828614256481454, 2.5831328149749293, 3.118014677288809, 2.0415685775758643, 2.855075432241642, 1.7934684811755763, 1.2783678427227467, 1.6329209586002937, 2.480967107516828, 1.9424263909121298, 3.2186606462551857, 1.2691146087107728, 1.6645517139803763, 0.3444190887916047, 2.479623319959078, 0.6441852294043552, 2.9203629896802985, 1.153112261057139};
+#ifdef TIDE_DEBUG
+/* Print a single event */
+void print_tide_event(tidal_event *event)
+{
+    char *event_type;
+    switch(event->type)
+    {
+        case TIDE_NONE: event_type = "--"; break;
+        case TIDE_HIGH: event_type = "HW"; break;
+        case TIDE_LOW: event_type = "LW"; break;
+    }
+    char *datetime = ctime(&event->time);
+    datetime[strlen(datetime)-1] = '\0';
+    printf("%s %s %2.2f\n", event_type, datetime, event->level);
+}
 
-tidal station_millport_scotland_2023 = {
-        .name = station_millport_scotland_2023_name,
-        .year = 2023,
-        .lat = 55.7496,
-        .lon = -4.9058,
-        .offset = 1.9962999820709229,
-        .speeds = station_millport_scotland_2023_speed,
-        .amps = station_millport_scotland_2023_amp,
-        .phases = station_millport_scotland_2023_phase,
-        .n_constituents = 38,
-        .mean_error = 0.00680195486959848
-};
+/* Print a tide table; this includes
+the hourly tide predictions, and the
+daily HW/LW events */
+void print_tide_table(tide_table *table)
+{
+    char *datetime;
+    time_t t;
+    printf("Tide table for %s\n", table->station->name);
+    t = table->base_time;
+    for(int i=0;i<72;i++)
+    {
+        datetime = ctime(&t);
+        datetime[strlen(datetime)-1] = '\0';
+        printf("%s %2.2f\n", datetime, table->levels[i]);
+        t += 3600;
+    }
+    /* And then the events */
+    printf("Yesterday\n");
+    for(int i=0;i<MAX_TIDE_EVENTS;i++)    
+        print_tide_event(&table->events[0][i]);        
+    printf("Today\n");
+    for(int i=0;i<MAX_TIDE_EVENTS;i++)    
+        print_tide_event(&table->events[1][i]);        
+   printf("Tomorrow\n");
+    for(int i=0;i<MAX_TIDE_EVENTS;i++)    
+        print_tide_event(&table->events[2][i]);        
+   
+}
+
+/* Iterate over all stations and print their tide tables */
+void print_all_tables()
+{
+    tide_table table;
+    tidal *station = tidal_stations;
+    table.station = NULL;
+    table.base_time = 0;
+    printf("Tide tables\n");
+    while(station!=NULL)
+    {        
+        populate_tide_table(&table, station, make_time(2023, 12, 17, 0, 0, 0), 0, 0);
+        print_tide_table(&table);
+        station = station->previous;
+        printf("\n\n");
+    }
+}
+#endif 
+
 
 int main(int argc, char **argv) {
+    time_t now;
     test_tides(&station_millport_scotland_2023, station_millport_scotland_2023_test_times, station_millport_scotland_2023_test_tides);
+    if(argc<2) {
+        printf("Usage: %s <station name>\n", argv[0]);
+        return 1;
+    }
+    /* Get current time */
+    now = time(NULL);
+    /* Extract current year */
+    struct tm *tm = gmtime(&now);    
+    /* Find the station */
+    tidal *station = find_tidal_station(argv[1], tm->tm_year+1900);
+    if(!station) {
+        printf("Station %s not found\n", argv[1]);
+        return 1;
+    }
+    tide_table table;
+    table.station = station;
+    table.base_time = 0;
+    populate_tide_table(&table, station, now, 0, 0);
+    print_tide_table(&table);
     return 0;
 }        

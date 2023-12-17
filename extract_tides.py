@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import random
 from scipy.optimize import curve_fit
-from dump_tides import dump_station, dump_station_years
+from dump_tides import dump_station, dump_station_years, dump_clock_station, finalise_tides
 from predict_tide import find_tide_event, find_tide_events
 
 def node_curve(x, frequency, amplitude, phase, offset):
@@ -76,6 +76,7 @@ station_fields = {"latitude":"lat", "longitude":"lon", "name":"name", "station_i
 @click.option("--station", type=str, default=None, help="Station to extract")
 @click.option("--year", type=int, default=None, help="Year to extract")
 def cli(input_file, station, year, min_amplitude):    
+    
     """This script extracts tidal data form a TCD converted JSON file"""
     if year is None:
         year = time.gmtime()[0]
@@ -91,18 +92,19 @@ def cli(input_file, station, year, min_amplitude):
         name = constituent["constituent_name"]
         constituents[name] = ({"speed":constituent["speed"], "n":constituent["constituent_number"], "name":name, "years":constituent["years"]})
 
-    
-    #analyse_constituents(constituents)
-            
-    for station in stations:
-        # only process type 1 for now
-        if station["record_type"] == 1 and station["name"].startswith(station_name):            
-            station_data = {v:station[k] for k,v in station_fields.items()}        
-            station_data["constituents"] = {c_name:{"amp":amp, "phase":epoch} for c_name, amp, epoch in zip(constituents.keys(), station["amplitude"], station["epoch"])}                        
-            #dump_station_years(station_data, year, year+5, constituents, min_amplitude)   
-            for h, t, l in find_tide_events(time.time(), 5, constituents, station_data):
-                print(f"{'HW' if h else 'LW'}\t{time.asctime(time.localtime(t))}\t{l:3.2f}m")      
-            
+    with open("tide_data.c", "w") as f:
+        prev_name = dump_clock_station(constituents, file=f, prev_name=None)
+        #analyse_constituents(constituents)
+                
+        for station in stations:
+            # only process type 1 for now
+            if station["record_type"] == 1 and station["name"].startswith(station_name):            
+                station_data = {v:station[k] for k,v in station_fields.items()}        
+                station_data["constituents"] = {c_name:{"amp":amp, "phase":epoch} for c_name, amp, epoch in zip(constituents.keys(), station["amplitude"], station["epoch"])}                        
+                prev_name = dump_station_years(station_data, year, year+5, constituents, min_amplitude, file=f, prev_name=prev_name)   
+                # for h, t, l in find_tide_events(time.time(), 5, constituents, station_data):
+                #     print(f"{'HW' if h else 'LW'}\t{time.asctime(time.localtime(t))}\t{l:3.2f}m")      
+        finalise_tides(prev_name, file=f)
     
 
 

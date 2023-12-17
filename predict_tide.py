@@ -50,33 +50,30 @@ def find_tide_event(t0, t1, constituents, station, epoch_year=None):
     tide0 = predict_tide(t0, constituents, station, d=1, epoch_year=epoch_year)
     tide1 = predict_tide(t1, constituents, station, d=1, epoch_year=epoch_year)
     if tide0*tide1>0:        
+        print("NO!")
         return None    
     
     # do a binary search to find the event approximately
     for i in range(3):        
         t = (t0 + t1) / 2        
         tide = predict_tide(t, constituents, station, d=1, epoch_year=epoch_year)    
-        if (tide * tide0) < 0:
-            t1 = t
-        else:
-            t0 = t
-    
+        t0, t1 = (t0, t) if tide*tide0<0 else (t, t1)
+        
     # refine via Newton's method
     t_d = predict_tide(t, constituents, station, 1, epoch_year)
     t_d2 = predict_tide(t, constituents, station, 2, epoch_year)
-    for i in range(3):
-        # compute the next Newton step
-        t = t - t_d / t_d2        
-        # compute the first derivative at the next step
-        t_d = predict_tide(t, constituents, station, 1, epoch_year)
-        # compute the second derivative at the next step
+    for i in range(3):        
+        t = t - t_d / t_d2                
+        t_d = predict_tide(t, constituents, station, 1, epoch_year)        
         t_d2 = predict_tide(t, constituents, station, 2, epoch_year)
     tide = predict_tide(t, constituents, station, 0, epoch_year)
-    ddtide = predict_tide(t, constituents, station, d=2, epoch_year=epoch_year)
+    
     # return the time and tide level
-    return ddtide<0, t, tide
+    return t_d2<0, t, tide
         
     
+
+
 
 def find_tide_events(t, bracket, constituents, station, epoch_year=None):
     """Find the n events in the bracket around time t.
@@ -92,4 +89,4 @@ def find_tide_events(t, bracket, constituents, station, epoch_year=None):
             events[t1] = (high, t1, level)
     sorted_events = sorted(events.values(), key=lambda x:x[1])  
     return sorted_events
-    
+        
