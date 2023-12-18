@@ -49,8 +49,7 @@ def find_tide_event(t0, t1, constituents, station, epoch_year=None):
         # compute the tide at the start and end of the interval
     tide0 = predict_tide(t0, constituents, station, d=1, epoch_year=epoch_year)
     tide1 = predict_tide(t1, constituents, station, d=1, epoch_year=epoch_year)
-    if tide0*tide1>0:        
-        print("NO!")
+    if tide0*tide1>0:                
         return None    
     
     # do a binary search to find the event approximately
@@ -73,12 +72,13 @@ def find_tide_event(t0, t1, constituents, station, epoch_year=None):
         
     
 
-
+from collections import namedtuple
+TideEvent = namedtuple("TideEvent", ["event_type", "time", "level"])
 
 def find_tide_events(t, bracket, constituents, station, epoch_year=None):
     """Find the n events in the bracket around time t.
     Bracket is the integer max number of events before/after t to search"""
-    tidal_period = 12.4206012 * 3600 * 0.5 # guess for the tidal period in seconds
+    tidal_period = 12.4206012 * 3600 * 0.25 # guess for the tidal period in seconds
     events = {}
     
     for i in range(-bracket, bracket+1):
@@ -86,7 +86,7 @@ def find_tide_events(t, bracket, constituents, station, epoch_year=None):
         res = find_tide_event(t0-tidal_period/2, t0+tidal_period/2, constituents, station, epoch_year)
         if res:
             high, t1, level = res
-            events[t1] = (high, t1, level)
+            events[t1] = TideEvent("high" if high else "low", t1, level)
     sorted_events = sorted(events.values(), key=lambda x:x[1])  
     return sorted_events
         

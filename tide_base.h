@@ -34,6 +34,8 @@ typedef struct tidal {
         int year;
         float lat;
         float lon; 
+        float neaps_range;
+        float springs_range;
         float offset;   
         uint32_t *speeds;
         uint16_t *amps;
@@ -55,6 +57,7 @@ typedef struct tidal_event
     uint8_t type;
     time_t time;
     float level;
+    float neap_spring;
 } tidal_event;
 
 /* Tide prediction table for 24 hours before and 48 hours after midnight on a given day */
@@ -65,8 +68,9 @@ typedef struct tide_table {
     tidal_event events[3][MAX_TIDE_EVENTS];
 } tide_table;
 
+float find_tide_event_near(tidal *station, tidal_event *event, time_t t0, time_t t1, float ntide);
 void populate_tide_table(tide_table *table, tidal *station, time_t base_time, int tz_hours, int tz_mins);
-void add_tide_event(tidal *station, time_t t, tidal_event *event, tidal_event *events);
+float add_tide_event(tidal *station, time_t t, tidal_event *event, tidal_event *events, float last_tide);
 void fill_day_tide_table(tidal_event *events, float *levels, tidal *station, time_t t0);
 float predict_tide(uint32_t t, tidal *station, int d);
 void test_tides(tidal *station, time_t *times, float *levels);

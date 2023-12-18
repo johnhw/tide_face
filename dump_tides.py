@@ -1,6 +1,6 @@
 from textwrap import dedent
 import re
-from predict_tide import predict_tide, unpack_tz, epoch, rads_per_second, seconds_tz
+from predict_tide import predict_tide, unpack_tz, epoch, rads_per_second, seconds_tz, find_tide_events
 import random, math
 
 MAX_AMP = 12.0
@@ -42,7 +42,7 @@ def extract_cycles(station, year, constituents, min_amp):
     less than min_amp"""
     amps = []
     phases = []
-    speeds = []
+    speeds = []    
     for c in station["constituents"]:
         station_amp = station["constituents"][c]["amp"]        
         node_factor = constituents[c]["years"][str(year)]["node_factor"]
@@ -54,8 +54,8 @@ def extract_cycles(station, year, constituents, min_amp):
             scale = 0.3048
         elif station["units"]=="meters":
             scale = 1.0 
-        if amp>min_amp:            
-            amps.append(amp * scale)
+        if amp>min_amp:                        
+            amps.append(amp * scale)            
             phase = math.radians(equilib - station_phase) - time_offset
             # force to radians in [0, 2pi]
             phase = phase % (2*math.pi)
@@ -63,7 +63,17 @@ def extract_cycles(station, year, constituents, min_amp):
                 phase += 2*math.pi
             phases.append(phase)
             speeds.append(rads_per_second(constituents[c]["speed"]))
+    
     return amps, phases, speeds
+
+def get_tidal_range(time, constituents, station):
+    events = find_tide_events(time, 3, constituents, station)
+    highs = [e for e in events if e.event_type=="high"]
+    lows = [e for e in events if e.event_type=="low"]
+    return highs[0].level - lows[0].level
+    
+    
+    
 
 def generate_tests(station, year, constituents, phases, speeds, amps, n_samples=400):
     """Generate a set of test times and tides for the given station and year.
@@ -72,9 +82,13 @@ def generate_tests(station, year, constituents, phases, speeds, amps, n_samples=
     returned, along with the test times and tide levels."""    
     min_time = epoch(year)
     max_time = epoch(year+1)
-    test_times = [random.randint(min_time, max_time) for _ in range(0, 32)]
+    test_times = [random.randint(min_time, max_time) for _ in range(0, 96)]
     test_tides = [predict_tide(t, constituents, station) for t in test_times]
     total_error = 0
+
+    # very slow but we only do it once
+    test_ranges = [get_tidal_range(time, constituents, station) for time in test_times]
+    neaps_range, springs_range = min(test_ranges), max(test_ranges)
     
     for i in range(n_samples):
         time = random.randint(min_time, max_time)
@@ -82,7 +96,7 @@ def generate_tests(station, year, constituents, phases, speeds, amps, n_samples=
         quantized = predict_c_tide(time, year,  quantize_seq(16, MAX_PHASE, phases), quantize_seq(32, MAX_SPEED, speeds),  quantize_seq(16, MAX_AMP, amps), station["offset"])
         total_error += abs(tide - quantized)
     mean_error = total_error / n_samples
-    return test_times, test_tides, mean_error
+    return test_times, test_tides, mean_error, neaps_range, springs_range
 
 def make_c_name(name):
     c_name = re.sub(r'[^a-zA-Z0-9_]', '_', name).lower()
@@ -107,6 +121,8 @@ def dump_clock_station(constituents, prev_name=None, file=None):
                             .year = 2000,
                             .lat = 0.0,
                             .lon = 0.0,
+                            .neaps_range = 2.0,
+                            .springs_range = 2.0,
                             .offset = 0.0,
                             .speeds = station_CLOCK_speed,
                             .amps = station_CLOCK_amp,
@@ -123,7 +139,7 @@ def dump_station(station, year, constituents, min_amp, speed_name=None, prev_nam
     c_name = make_c_name(name)
     
     amps, phases, speeds = extract_cycles(station, year, constituents, min_amp)
-    test_times, test_tides, mean_error = generate_tests(station, year, constituents, phases, speeds, amps)
+    test_times, test_tides, mean_error, neaps_range, springs_range = generate_tests(station, year, constituents, phases, speeds, amps)
     
     prev_name = prev_name if prev_name is not None else "NULL"
     print(dedent(f"""                 
@@ -155,6 +171,8 @@ def dump_station(station, year, constituents, min_amp, speed_name=None, prev_nam
                             .year = {year},
                             .lat = {station["lat"]},
                             .lon = {station["lon"]},
+                            .neaps_range = {neaps_range},
+                            .springs_range = {springs_range},
                             .offset = {station["offset"]},
                             .speeds = {speed_name},
                             .amps = station_{c_name}_{year}_amp,
