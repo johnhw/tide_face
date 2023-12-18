@@ -216,15 +216,13 @@ float interpolate_tide_table(time_t t, tide_table *table)
 
 
 /* Return the tide event just before and just after t 
-prev and next should be pointers to tidal_event structs to be filled out.
-prev and next will be set to an empty tide event if there is no event before or after t.
+prev and next will be set to NULL
 */
-void get_tide_events_near(time_t t, tide_table *table, tidal_event *prev, tidal_event *next)
+void get_tide_events_near(time_t t, tide_table *table, tidal_event **prev, tidal_event **next)
 {
-    static const tidal_event null_tide_event = {TIDE_NONE, 0, 0.0, 0.0};
     tidal_event *last_good = NULL;
-    *prev = null_tide_event;
-    *next = null_tide_event;
+    *prev = NULL;
+    *next = NULL;
     /* Check if t is in range */
     if(t<table->base_time-DAY_SECONDS || t>=table->base_time+DAY_SECONDS*2-HOUR_SECONDS) return;
     
@@ -234,8 +232,8 @@ void get_tide_events_near(time_t t, tide_table *table, tidal_event *prev, tidal_
         {
             if(table->events[i][j].time>t)
             {
-                *next = table->events[i][j];
-                if(last_good) *prev = *last_good;                
+                *next = &(table->events[i][j]);
+                if(last_good) *prev = last_good;                
                 return;
             }
             if(table->events[i][j].type!=TIDE_NONE) last_good = &table->events[i][j];
@@ -293,7 +291,6 @@ void populate_tide_table(tide_table *table, tidal *station, time_t base_time, in
     table->station = station;
 }    
 
-    
 
 
 #ifdef TIDE_DEBUG
@@ -314,7 +311,7 @@ void print_tide_event(tidal_event *event)
 
     char *datetime = ctime(&event->time);
     datetime[strlen(datetime)-1] = '\0';
-    printf("%s %s %2.2f %s\n", event_type, datetime, event->level, neap_spring);
+    printf("%s %s %2.2fm %s\n", event_type, datetime, event->level, neap_spring);
 }
 
 /* Print a tide table; this includes
@@ -330,20 +327,33 @@ void print_tide_table(tide_table *table)
     {
         datetime = ctime(&t);
         datetime[strlen(datetime)-1] = '\0';
-        printf("%s %2.2f\n", datetime, table->levels[i]);
+        printf("%s %2.2fm\n", datetime, table->levels[i]);
         t += 3600;
     }
     /* And then the events */
-    printf("Yesterday\n");
+    printf("\nYesterday\n");
     for(int i=0;i<MAX_TIDE_EVENTS;i++)    
         print_tide_event(&table->events[0][i]);        
-    printf("Today\n");
+    printf("\nToday\n");
     for(int i=0;i<MAX_TIDE_EVENTS;i++)    
         print_tide_event(&table->events[1][i]);        
-   printf("Tomorrow\n");
+   printf("\nTomorrow\n");
     for(int i=0;i<MAX_TIDE_EVENTS;i++)    
         print_tide_event(&table->events[2][i]);        
    
+    printf("\n");
+   printf("Tide interpolated now\n");
+    t = time(NULL);
+    datetime = ctime(&t);
+    datetime[strlen(datetime)-1] = '\0';
+    printf("%s %2.2fm\n", datetime, interpolate_tide_table(t, table));
+    printf("\n");
+
+    printf("Tide events before and after now\n");
+    tidal_event *prev, *next;
+    get_tide_events_near(t, table, &prev, &next);
+    print_tide_event(prev);
+    print_tide_event(next);
 }
 
 /* Iterate over all stations and print their tide tables */
