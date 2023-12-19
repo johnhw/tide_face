@@ -15,6 +15,11 @@ def get_seq(bits, max_val, seq):
         elts.append(int((val / max_val) * ((2**bits)-1)))
     return ", ".join([f"0x{x:X}" for x in elts])
 
+def float_seq(seq):
+    """Return a string of floats, with high precision (16 decimal places)"""    
+    return ", ".join([f"{x:0.16e}" for x in seq])
+
+
 def quantize_seq(bits, max_val, seq):
     """Quantize the sequence to the given number of bits,
     with the given max value"""
@@ -112,13 +117,14 @@ def dump_clock_station(constituents, prev_name=None, file=None):
     prev_name = prev_name if prev_name is not None else "NULL"
     print(dedent(f"""                                     
                     char station_CLOCK_name [] = "CLOCK";
-                    uint32_t station_CLOCK_speed [] = {{{get_seq(32, MAX_SPEED, speeds)}}};
+                    float station_CLOCK_speed [] = {{{float_seq(speeds)}}};
                     uint16_t station_CLOCK_amp [] = {{{get_seq(16, MAX_AMP, amps)}}};
                     uint16_t station_CLOCK_phase [] = {{{get_seq(16, MAX_PHASE, phases)}}};
                     tidal station_CLOCK = {{
                             .type = STATION_TYPE_CLOCK,
                             .name = station_CLOCK_name,
-                            .year = 2000,
+                            .base_year = 1000,
+                            .n_years = 2000,
                             .lat = 0.0,
                             .lon = 0.0,
                             .neaps_range = 2.0,
@@ -134,62 +140,75 @@ def dump_clock_station(constituents, prev_name=None, file=None):
 """), file=file)
     return f"station_CLOCK"
 
-def dump_station(station, year, constituents, min_amp, speed_name=None, prev_name=None, include_tests=True, file=None):
+def dump_station_years(station, min_year, max_year, constituents, min_amp,  prev_name=None, include_tests=True, file=None):
     name = station["name"]
     c_name = make_c_name(name)
     
-    amps, phases, speeds = extract_cycles(station, year, constituents, min_amp)
-    test_times, test_tides, mean_error, neaps_range, springs_range = generate_tests(station, year, constituents, phases, speeds, amps)
+    year_data = []
+    for year in range(min_year, max_year):
+        amps, phases, speeds = extract_cycles(station, year, constituents, min_amp)
+        test_times, test_tides, mean_error, neaps_range, springs_range = generate_tests(station, year, constituents, phases, speeds, amps)
+        year_data.append({"year":year, "amps":amps, "phases":phases, "speeds":speeds, "mean_error":mean_error, "test_times":test_times, "test_tides":test_tides, "neaps_range":neaps_range, "springs_range":springs_range})
     
+    speeds = year_data[0]["speeds"] # always constant
+    neaps_range = year_data[0]["neaps_range"]
+    springs_range = year_data[0]["springs_range"]
+    mean_error = sum([y["mean_error"] for y in year_data]) / len(year_data)
+    n_constituents = len(speeds)
+    # concatenate all the amps and phases
+    amps = []
+    phases = []
+    test_times = []
+    test_tides = []
+    for y in year_data:
+        amps += y["amps"]
+        phases += y["phases"]
+        test_times += y["test_times"]
+        test_tides += y["test_tides"]
+    
+    # quantize the amps and phases
+    amps = get_seq(16, MAX_AMP, amps)
+    phases = get_seq(16, MAX_PHASE, phases)
+    speeds = float_seq(speeds)
+
     prev_name = prev_name if prev_name is not None else "NULL"
+    speed_name = f"station_{c_name}_{min_year}_speed"
     print(dedent(f"""                 
-                    /* Mean error for {name} in {year} is approximately {mean_error:.3f}m */
-                    char station_{c_name}_{year}_name [] = "{name}";
-                    """), file=file)
-    # don't store the speed if it's the same as the previous year
-    if speed_name is None:
-        print(dedent(f"""            
-                    uint32_t station_{c_name}_{year}_speed [] = {{{get_seq(32, MAX_SPEED, speeds)}}};
-                """), file=file)
-        speed_name = f"station_{c_name}_{year}_speed"
-    print(dedent(f"""
-                    uint16_t station_{c_name}_{year}_amp [] = {{{get_seq(16, MAX_AMP, amps)}}};
-                    uint16_t station_{c_name}_{year}_phase [] = {{{get_seq(16, MAX_PHASE, phases)}}};
-                    """), file=file)
-    if include_tests:
-        print(dedent(f"""
-                    #ifdef TIDE_DEBUG
-                    time_t station_{c_name}_{year}_test_times [] = {{{", ".join([str(t) for t in test_times])}}};
-                    float station_{c_name}_{year}_test_tides [] = {{{", ".join([str(t) for t in test_tides])}}};
-                    #endif
-                """), file=file)
-        
-    print(dedent(f"""
-                    tidal station_{c_name}_{year} = {{
+                    /* Mean error for {name} in {min_year}-{max_year} is approximately {mean_error:.5f}m */
+                    char station_{c_name}_{min_year}_name [] = "{name}";                    
+                    float station_{c_name}_{min_year}_speed [] = {{{speeds}}};                
+                    uint16_t station_{c_name}_{min_year}_amp [] = {{{amps}}};
+                    uint16_t station_{c_name}_{min_year}_phase [] = {{{phases}}};
+                    tidal station_{c_name}_{min_year} = {{
                             .type = STATION_TYPE_HARMONIC,
-                            .name = station_{c_name}_{year}_name,
-                            .year = {year},
+                            .name = station_{c_name}_{min_year}_name,
+                            .base_year = {min_year},
+                            .n_years = {max_year-min_year},
                             .lat = {station["lat"]},
                             .lon = {station["lon"]},
                             .neaps_range = {neaps_range},
                             .springs_range = {springs_range},
                             .offset = {station["offset"]},
                             .speeds = {speed_name},
-                            .amps = station_{c_name}_{year}_amp,
-                            .phases = station_{c_name}_{year}_phase,
-                            .n_constituents = {len(amps)},
+                            .amps = station_{c_name}_{min_year}_amp,
+                            .phases = station_{c_name}_{min_year}_phase,
+                            .n_constituents = {n_constituents},
                             .mean_error = {mean_error},
                             .previous = &{prev_name},
                     }};                                        
 """), file=file)
-    return speed_name, f"station_{c_name}_{year}"
+    
+    if include_tests:
+        print(dedent(f"""
+                    #ifdef TIDE_DEBUG
+                    time_t station_{c_name}_{min_year}_test_times [] = {{{", ".join([str(t) for t in test_times])}}};
+                    float station_{c_name}_{min_year}_test_tides [] = {{{", ".join([str(t) for t in test_tides])}}};
+                    #endif
+                """), file=file)    
+    
+    return  f"station_{c_name}_{min_year}"
 
-def dump_station_years(station, min_year, max_year, constituents, min_amp, include_tests=True, prev_name=None, file=None):
-    """Dump the station for the given range of years."""
-    speed_name = None    
-    for year in range(min_year, max_year+1):
-        speed_name, prev_name = dump_station(station, year, constituents, min_amp, speed_name, prev_name, file=file)
-    return prev_name
+
 
 def finalise_tides(prev_name, file=None):
     print(dedent(f"""

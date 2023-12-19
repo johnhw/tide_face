@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import random
 from scipy.optimize import curve_fit
-from dump_tides import dump_station, dump_station_years, dump_clock_station, finalise_tides
+from dump_tides import  dump_station_years, dump_clock_station, finalise_tides
 from predict_tide import find_tide_event, find_tide_events
 
 def node_curve(x, frequency, amplitude, phase, offset):
@@ -36,33 +36,34 @@ def fit_sin(tt, yy):
 def analyse_constituents(constituents):
     # plot the data
     for constituent in constituents:        
-        print(constituent)
-        nodes = [constituents[constituent]["years"][k]["node_factor"] for k in constituents[constituent]["years"]]
+        # print(constituent)
+        # nodes = [constituents[constituent]["years"][k]["node_factor"] for k in constituents[constituent]["years"]]
         ph_shift = [constituents[constituent]["speed"] * (24 * 365.25) for _ in constituents[constituent]["years"]] 
         eqs = [constituents[constituent]["years"][k]["equilibrium"] for k in constituents[constituent]["years"]]
-        fig, ax = plt.subplots(2,1, figsize=(24,12))
-        corrections = []
-        while np.mean(np.abs(nodes))>0.05 and len(corrections)<3:
-            node_fit = fit_sin(np.array(range(len(nodes))), np.array(nodes))
+        # fig, ax = plt.subplots(2,1, figsize=(24,12))
+        # corrections = []
+        # while np.mean(np.abs(nodes))>0.05 and len(corrections)<3:
+        #     node_fit = fit_sin(np.array(range(len(nodes))), np.array(nodes))
             
-            ax[0].plot(nodes - np.mean(nodes), label=constituent)
-            nodes = nodes - node_fit["fitfunc"](np.array(range(len(nodes))))
-            ax[0].plot(nodes - np.mean(nodes), label=constituent)
-            print(f"Avg. residual: {np.mean(np.abs(nodes))}")
-            corrections.append({"amp":node_fit["amp"], "phase":node_fit["phase"], "freq":node_fit["freq"], "offset":node_fit["offset"]})
+        #     ax[0].plot(nodes - np.mean(nodes), label=constituent)
+        #     nodes = nodes - node_fit["fitfunc"](np.array(range(len(nodes))))
+        #     ax[0].plot(nodes - np.mean(nodes), label=constituent)
+        #     print(f"Avg. residual: {np.mean(np.abs(nodes))}")
+        #     corrections.append({"amp":node_fit["amp"], "phase":node_fit["phase"], "freq":node_fit["freq"], "offset":node_fit["offset"]})
         
         ph_shift = np.array(ph_shift)                 
         prad = np.unwrap(np.radians(np.array(eqs)-np.array(ph_shift)%360))
-        mean_shift = np.mean(np.diff(prad))        
+        mean_shift = np.degrees(np.mean(np.diff(prad)))
+        print(constituent, mean_shift)
 
-        prad = prad - mean_shift * np.arange(len(prad))
-        prad = prad - np.mean(prad)
-        print(mean_shift)
-        ax[1].plot(prad, label="phase")        
-        ax[1].axhline(0, color="black")
+        # prad = prad - mean_shift * np.arange(len(prad))
+        # prad = prad - np.mean(prad)
+        # print(mean_shift)
+        # ax[1].plot(prad, label="phase")        
+        # ax[1].axhline(0, color="black")
         
         
-        fig.savefig(f"node_{constituent}.png")
+        # fig.savefig(f"node_{constituent}.png")
 
     
 
@@ -71,39 +72,41 @@ station_fields = {"latitude":"lat", "longitude":"lon", "name":"name", "station_i
 
 # extract type 2 records (reference stations with offsets)
 @click.command()
-@click.argument("input_file", type=click.Path(exists=True))
+@click.argument("input-file", type=click.Path(exists=True))
 @click.option("--min-amplitude", type=float, default=1e-3, help="Minimum amplitude to include in output")
-@click.option("--station", type=str, default=None, help="Station to extract")
-@click.option("--year", type=int, default=None, help="Year to extract")
-def cli(input_file, station, year, min_amplitude):    
+@click.option("--stations", type=str, default=None, help="Stations to extract, space separated")
+@click.option("--base-year", type=int, default=None, help="Base year to extract from")
+@click.option("--years", type=int, default=5, help="Number of years to extract")
+@click.option("--output-file", type=click.Path(), default="tide_data.c", help="Output file")
+def cli(input_file, stations, years, base_year, min_amplitude, output_file):    
     
     """This script extracts tidal data form a TCD converted JSON file"""
-    if year is None:
-        year = time.gmtime()[0]
-        print(f"Using current year {year}")
+    if base_year is None:
+        base_year = time.gmtime()[0]
+        print(f"Using current year {base_year}")
 
-    station_name = station
     with open(input_file, "r") as f:
         data = json.load(f)
-    stations = data["tide_records"]
-    constituents = {}
-    
+
+    all_stations = data["tide_records"]    
+    stations = stations.split(" ") 
+
+    constituents = {}    
     for constituent in data["constituents"]:
         name = constituent["constituent_name"]
-        constituents[name] = ({"speed":constituent["speed"], "n":constituent["constituent_number"], "name":name, "years":constituent["years"]})
-
-    with open("tide_data.c", "w") as f:
+        constituents[name] = ({"speed":constituent["speed"], "n":constituent["constituent_number"], "name":name, "years":constituent["years"]})    
+                    
+    with open(output_file, "w") as f:
         prev_name = dump_clock_station(constituents, file=f, prev_name=None)
-        #analyse_constituents(constituents)
+        analyse_constituents(constituents)
                 
-        for station in stations:
+        for station in all_stations:
             # only process type 1 for now
-            if station["record_type"] == 1 and station["name"].startswith(station_name):            
-                station_data = {v:station[k] for k,v in station_fields.items()}        
-                station_data["constituents"] = {c_name:{"amp":amp, "phase":epoch} for c_name, amp, epoch in zip(constituents.keys(), station["amplitude"], station["epoch"])}                        
-                prev_name = dump_station_years(station_data, year, year+5, constituents, min_amplitude, file=f, prev_name=prev_name)   
-                # for h, t, l in find_tide_events(time.time(), 5, constituents, station_data):
-                #     print(f"{'HW' if h else 'LW'}\t{time.asctime(time.localtime(t))}\t{l:3.2f}m")      
+            for possible_station in stations:
+                if station["record_type"] == 1 and station["name"].startswith(possible_station):            
+                    station_data = {v:station[k] for k,v in station_fields.items()}        
+                    station_data["constituents"] = {c_name:{"amp":amp, "phase":epoch} for c_name, amp, epoch in zip(constituents.keys(), station["amplitude"], station["epoch"])}                        
+                    prev_name = dump_station_years(station_data, base_year, base_year+years, constituents, min_amplitude, file=f, prev_name=prev_name)                       
         finalise_tides(prev_name, file=f)
     
 

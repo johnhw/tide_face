@@ -8,6 +8,7 @@
 #include <time.h>
 #include <ctype.h>
 #include <math.h>
+
 #include "tide_data.c"
 
 time_t make_time(uint32_t year, uint32_t month, uint32_t day, uint32_t hour, uint32_t minute, uint32_t second) {
@@ -24,14 +25,21 @@ time_t make_time(uint32_t year, uint32_t month, uint32_t day, uint32_t hour, uin
 
 /* Take a time in seconds since the epoch (UTC) 
     and predict the tide height in meters at that time. */
-float predict_tide(uint32_t t, tidal *station, int d) {                        
-    t = t - make_time(station->year, 1, 1, 0, 0, 0);
+float predict_tide(uint32_t t, tidal *station, int d) {                 
+    int32_t year;           
+    int32_t n;
+    
+    t = t - make_time(station->base_year, 1, 1, 0, 0, 0);
+    if(t<0) year = 0;
+    if(t>=station->n_years*YEAR_SECONDS) year = station->n_years-1;
+    else year = t / YEAR_SECONDS;
+    n = station->n_constituents * year;
     float tide = (d>0) ? 0 : station->offset;
     float phase_shift = d * M_PI / 2.0f;
     for (int i=0; i<station->n_constituents; i++) {
-        float speed = UNQUANTIZE_SPEED(station->speeds[i]);
-        float amp = UNQUANTIZE_AMP(station->amps[i]);
-        float phase = UNQUANTIZE_PHASE(station->phases[i]);
+        float speed = station->speeds[i+n];
+        float amp = UNQUANTIZE_AMP(station->amps[i+n]);
+        float phase = UNQUANTIZE_PHASE(station->phases[i+n]);
         float term = amp * cosf(speed * t + phase + phase_shift);
         term = d>0 ? term * powf(speed, d) : term;
         tide += term;
@@ -73,14 +81,15 @@ tidal *find_tidal_station(char *name, int year) {
         match = insenstive_is_prefix(name, station->name);
         if (match) {
             /* Exact match */
-            if(station->year == year) {
+            if(year >= station->base_year && year < station->base_year + station->n_years) {
                 return station;
             }            
             else
             {                
+                int mid_year = station->base_year + station->n_years / 2;
                 /* Possible year match */
-                if(abs(station->year - year) < abs(best_year - year)) {
-                    best_year = station->year;
+                if(abs(mid_year - year) < abs(best_year - year)) {
+                    best_year = mid_year;
                     best_station = station;
                 }
             }
@@ -292,110 +301,3 @@ void populate_tide_table(tide_table *table, tidal *station, time_t base_time, in
 }    
 
 
-
-#ifdef TIDE_DEBUG
-/* Print a single event */
-void print_tide_event(tidal_event *event)
-{
-    char *event_type, *neap_spring;
-    switch(event->type)
-    {
-        case TIDE_NONE: event_type = "--"; break;
-        case TIDE_HIGH: event_type = "HW"; break;
-        case TIDE_LOW: event_type = "LW"; break;
-    }
-    
-    if(event->neap_spring<0.25) neap_spring = "Neap";
-    else if(event->neap_spring>0.75) neap_spring = "Spring";
-    else neap_spring = "Mid";
-
-    char *datetime = ctime(&event->time);
-    datetime[strlen(datetime)-1] = '\0';
-    printf("%s %s %2.2fm %s\n", event_type, datetime, event->level, neap_spring);
-}
-
-/* Print a tide table; this includes
-the hourly tide predictions, and the
-daily HW/LW events */
-void print_tide_table(tide_table *table)
-{
-    char *datetime;
-    time_t t;
-    printf("Tide table for %s\n", table->station->name);
-    t = table->base_time;
-    for(int i=0;i<72;i++)
-    {
-        datetime = ctime(&t);
-        datetime[strlen(datetime)-1] = '\0';
-        printf("%s %2.2fm\n", datetime, table->levels[i]);
-        t += 3600;
-    }
-    /* And then the events */
-    printf("\nYesterday\n");
-    for(int i=0;i<MAX_TIDE_EVENTS;i++)    
-        print_tide_event(&table->events[0][i]);        
-    printf("\nToday\n");
-    for(int i=0;i<MAX_TIDE_EVENTS;i++)    
-        print_tide_event(&table->events[1][i]);        
-   printf("\nTomorrow\n");
-    for(int i=0;i<MAX_TIDE_EVENTS;i++)    
-        print_tide_event(&table->events[2][i]);        
-   
-    printf("\n");
-   printf("Tide interpolated now\n");
-    t = time(NULL);
-    datetime = ctime(&t);
-    datetime[strlen(datetime)-1] = '\0';
-    printf("%s %2.2fm\n", datetime, interpolate_tide_table(t, table));
-    printf("\n");
-
-    printf("Tide events before and after now\n");
-    tidal_event *prev, *next;
-    get_tide_events_near(t, table, &prev, &next);
-    print_tide_event(prev);
-    print_tide_event(next);
-}
-
-/* Iterate over all stations and print their tide tables */
-void print_all_tables()
-{
-    tide_table table;
-    tidal *station = tidal_stations;
-    table.station = NULL;
-    table.base_time = 0;
-    printf("Tide tables\n");
-    while(station!=NULL)
-    {        
-        populate_tide_table(&table, station, make_time(2023, 12, 17, 0, 0, 0), 0, 0);
-        print_tide_table(&table);
-        station = station->previous;
-        printf("\n\n");
-    }
-}
-#endif 
-
-
-int main(int argc, char **argv) {
-    time_t now;
-    test_tides(&station_millport_scotland_2023, station_millport_scotland_2023_test_times, station_millport_scotland_2023_test_tides);
-    if(argc<2) {
-        printf("Usage: %s <station name>\n", argv[0]);
-        return 1;
-    }
-    /* Get current time */
-    now = time(NULL);
-    /* Extract current year */
-    struct tm *tm = gmtime(&now);    
-    /* Find the station */
-    tidal *station = find_tidal_station(argv[1], tm->tm_year+1900);
-    if(!station) {
-        printf("Station %s not found\n", argv[1]);
-        return 1;
-    }
-    tide_table table;
-    table.station = station;
-    table.base_time = 0;
-    populate_tide_table(&table, station, now, 0, 0);
-    print_tide_table(&table);
-    return 0;
-}        

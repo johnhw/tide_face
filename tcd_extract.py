@@ -1,6 +1,7 @@
 import ctypes
 import json
 import os
+import sys 
 
 # Load the libtcd shared library using ctypes
 # set the path here to the location of the libtcd.so file
@@ -377,6 +378,8 @@ def open_and_generate_json(database_file, output_file):
 
 
 if __name__=="__main__":
+    if len(sys.argv) > 1:
+        base_path = sys.argv[1]
     # Example usage
     os.listdir(base_path)
     for file in os.listdir(base_path):
