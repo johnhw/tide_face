@@ -259,14 +259,14 @@ void get_tide_events_near(time_t t, tide_table *table, tidal_event **prev, tidal
 
 /* Set the min/max tides for this day, based on the events that occurred. */
 /* TODO: deal with the case where there are not enough events (rare, but maybe possible) */
-void update_range(tidal_event *events, float *hw_low)
+void update_range(tidal_event *events, float *hw, float *lw)
 {
-    hw_low[0] = 10000.0;  // m, so this should be sufficient
-    hw_low[1] = -10000.0;
+    *hw = -10000.0;  // m, so this should be sufficient
+    *lw = 10000.0;
     for(int i=0;i<MAX_TIDE_EVENTS;i++)
     {
-        if(events[i].type==TIDE_LOW && events[i].level<hw_low[0]) hw_low[0] = events[i].level;
-        if(events[i].type==TIDE_HIGH && events[i].level>hw_low[1]) hw_low[1] = events[i].level;        
+        if(events[i].type==TIDE_LOW && events[i].level<*lw) *lw = events[i].level;
+        if(events[i].type==TIDE_HIGH && events[i].level>*hw) *hw = events[i].level;        
     }
 }
 

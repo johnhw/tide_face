@@ -65,7 +65,7 @@ typedef struct tidal_harmonic {
         float mean_error;        
 } tidal_harmonic;
 
-tidal  *tidal_stations;
+tidal_station  *tidal_stations;
 
 /* Tidal event enumeration */
 #define TIDE_NONE 0 
@@ -93,13 +93,15 @@ typedef struct tide_table {
 
 float find_tide_event_near(tidal_station *station, tidal_event *event, time_t t0, time_t t1, float ntide);
 void populate_tide_table(tide_table *table, tidal_station *station, time_t base_time, int tz_hours, int tz_mins);
-float add_tide_event(tidal *station, time_t t, tidal_event *event, tidal_event *events, float last_tide);
+float add_tide_event(tidal_station *station, time_t t, tidal_event *event, tidal_event *events, float last_tide);
 void fill_day_tide_table(tidal_event *events, float *levels, tidal_station *station, time_t t0);
 float predict_tide(time_t t, tidal_station *h_station, int d);
 void test_tides(tidal_station *station, time_t *times, float *levels);
 void get_tide_events_near(time_t t, tide_table *table, tidal_event **prev, tidal_event **next);
-float interpolate_tide_table(time_t t, tide_table *table);
+float interpolate_tide_level(time_t t, tide_table *table);
+float interpolate_tide_rate(time_t t, tide_table *table);
 time_t make_time(uint32_t year, uint32_t month, uint32_t day, uint32_t hour, uint32_t minute, uint32_t second);
 tidal_station *find_tidal_station(char *name);
+void update_range(tidal_event *events, float *hw, float *lw);
 
 #endif

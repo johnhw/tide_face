@@ -62,7 +62,12 @@ void print_tide_table(tide_table *table)
     t = time(NULL);
     datetime = ctime(&t);
     datetime[strlen(datetime)-1] = '\0';
-    printf("%s %2.2fm\n", datetime, interpolate_tide_table(t, table));
+    printf("%s %2.2fm %+2.2fm/h\n", datetime, interpolate_tide_level(t, table), interpolate_tide_rate(t, table));
+    
+    printf("\n");
+    float hw, lw;
+    update_range(table->events[1], &hw, &lw);
+    printf("Todays range: HW %2.2fm LW %2.2fm\n", hw, lw);
     printf("\n");
 
     printf("Tide events before and after now\n");
@@ -76,7 +81,7 @@ void print_tide_table(tide_table *table)
 void print_all_tables()
 {
     tide_table table;
-    tidal *station = tidal_stations;
+    tidal_station *station = tidal_stations;
     table.station = NULL;
     table.base_time = 0;
     printf("Tide tables\n");
@@ -93,15 +98,15 @@ void print_all_tables()
 
 int main(int argc, char **argv) {
     time_t now;
-    tidal *station; 
+    tidal_station *station; 
     //test_tides(&station_millport_scotland_2023, station_millport_scotland_2023_test_times, station_millport_scotland_2023_test_tides);
     if(argc<2) {
         /* Dump the names of all known stations */
         printf("Usage: %s <station name>\n\n", argv[0]);        
         printf("Known stations:\n");
-        tidal *station = tidal_stations;
+        tidal_station *station = tidal_stations;
         while(station!=NULL) {
-            printf("%45s\t(%d-%d)\n", station->name, station->base_year, station->base_year + station->n_years);
+            printf("%45s\t(%d-%d)\n", station->name, station->harmonic->base_year, station->harmonic->base_year + station->harmonic->n_years);
             station = station->previous;
         }
         return 1;
@@ -109,10 +114,10 @@ int main(int argc, char **argv) {
     
     /* Get current time */
     now = time(NULL);
-    /* Extract current year */
-    struct tm *tm = gmtime(&now);    
+    
+    
     /* Find the station */
-    station = find_tidal_station(argv[1], tm->tm_year+1900);
+    station = find_tidal_station(argv[1]);
     if(!station) {
         printf("Station %s not found\n", argv[1]);
         return 1;
