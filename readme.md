@@ -27,10 +27,6 @@ The tide level is shown in the seconds indicator.
 
 The tides faces shows HW/LW events, starting with the last event before the current time. The face shows the time of the event, the tide height, and the type of tide (high/low, springs/neaps). The face also shows the next five events. 
 
-```
-        lo n 
-    22:31 02
-```
 
 ```
         hi n 
@@ -46,11 +42,11 @@ Next event is low water, springs, at 10:31, 0.2m
 
 ```
 
-24H  hi n 
+24H  hi = 
     07:19 32
 ```
 
-Next event is 07:19 tomorrow, neaps, 3.2m
+Next event is 05:19 tomorrow, mid-tide, 3.2m
 
 
 Tides less than 0 show as `-3` to mean `-0.3m`. Tides less than -1m are shown as `--`. Tides of 10m or greater show as `99` to mean `>9.9m`.
