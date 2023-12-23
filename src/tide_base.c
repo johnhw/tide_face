@@ -25,19 +25,21 @@ time_t make_time(uint32_t year, uint32_t month, uint32_t day, uint32_t hour, uin
 
 /* Take a time in seconds since the epoch (UTC) 
     and predict the tide height in meters at that time. */
-float predict_tide(time_t t0, tidal_harmonic *h_station, int d) {                 
+float predict_tide(time_t t0, tidal_station *station, int d) {                 
     int32_t year;           
     int32_t n;
     int32_t t;
-    
+    tidal_harmonic *h_station = station->harmonic;
+    tidal_offset *offset = station->offset;
     t = t0 - make_time(h_station->base_year, 1, 1, 0, 0, 0);
+    t = t + offset->time_offset; /* TODO: check sign! */
     /* clip the year to the range of the table */
     if(t<0) year = 0;
     if(t>=h_station->n_years*YEAR_SECONDS) year = h_station->n_years-1;
     else year = t / YEAR_SECONDS;
     /* Get the index into the table */
     n = h_station->n_constituents * year;
-    float tide = (d>0) ? 0 : h_station->offset;
+    float tide = (d>0) ? 0 : (h_station->offset + offset->level_offset);
     float phase_shift = d * M_PI / 2.0f;
     for (int i=0; i<h_station->n_constituents; i++) {
         float speed = h_station->speeds[i+n];
@@ -46,8 +48,8 @@ float predict_tide(time_t t0, tidal_harmonic *h_station, int d) {
         float term = amp * cosf(speed * t + phase + phase_shift);
         term = d>0 ? term * powf(speed, d) : term;
         tide += term;
-    }    
-    return tide;
+    }            
+    return tide * offset->level_scale;
 }
 
 /* Test the tide prediction for a station against a set of known times and levels. */
@@ -87,7 +89,7 @@ tidal_station *find_tidal_station(char *name) {
 
 #define N_NEWTON 3
 #define N_BINARY 2
-float find_tide_event(tidal_harmonic *station, tidal_event *event, time_t t0, time_t t1, float ntide)
+float find_tide_event(tidal_station *station, tidal_event *event, time_t t0, time_t t1, float ntide)
 {
     float tide0, tide1;
     float t_d, t_d2;
@@ -136,7 +138,9 @@ float find_tide_event(tidal_harmonic *station, tidal_event *event, time_t t0, ti
     event->type = (t_d2<0) ? TIDE_HIGH : TIDE_LOW;    
     
     /* Calculate the neap-spring value, from 0.0 to 1.0 */
-    event->neap_spring = (fabs(event->level - station->offset) - station->neaps_range) / (station->springs_range - station->neaps_range);
+    tidal_harmonic *h_station = station->harmonic;
+    tidal_offset *offset = station->offset;
+    event->neap_spring = (fabs(event->level - h_station->offset - offset->level_offset) - h_station->neaps_range) / ((h_station->springs_range - h_station->neaps_range) * offset->level_scale);
     event->neap_spring = fmax(0.0, fmin(1.0, event->neap_spring));
 
     /* Return the tide at the right of the bracket 
@@ -180,22 +184,6 @@ float add_tide_event(tidal_station *station, time_t t, tidal_event *event, tidal
     return last_tide;
 }
 
-/* Apply corrections to a tide table */
-void adjust_tide_table(tide_table *table)
-{
-    /* No correction; this is the default */
-    if(table->station->type==STATION_TYPE_HARMONIC) return;
-    /* Simple offset adjustment */
-    if(table->station->type==STATION_TYPE_OFFSET) 
-    {
-
-    }
-    /* Secondary port adjustment */
-    if(table->station->type==STATION_TYPE_REFERENCE)
-    {
-
-    }
-}
 
 /* Populate the tide table for a single day */
 void fill_day_tide_table(tidal_event *events, float *levels, tidal_station *station, time_t t0)    
@@ -307,7 +295,6 @@ void populate_tide_table(tide_table *table, tidal_station *station, time_t base_
         for(int i=0; i<72; i++) table->levels[i] = table->levels[i+24];
         for(int i=0; i<3; i++) for(int j=0; j<MAX_TIDE_EVENTS; j++) table->events[i][j] = table->events[i][j+1];
         fill_day_tide_table(table->events[2], table->levels+48, station, midnight+DAY_SECONDS);  
-        update_range(table->events[2], table->hw_low[2]);
         table->base_time = midnight;      
         return;        
     }
@@ -317,8 +304,7 @@ void populate_tide_table(tide_table *table, tidal_station *station, time_t base_
         /* Shift the table forward one day */
         for(int i=71; i>=0; i--) table->levels[i+24] = table->levels[i];
         for(int i=2; i>=0; i--) for(int j=MAX_TIDE_EVENTS-1; j>=0; j--) table->events[i][j+1] = table->events[i][j];
-        fill_day_tide_table(table->events[0], table->levels, station, midnight-DAY_SECONDS);         
-        update_range(table->events[0], table->hw_low[0]);
+        fill_day_tide_table(table->events[0], table->levels, station, midnight-DAY_SECONDS);                 
         table->base_time = midnight;       
         return;
     }   
@@ -327,8 +313,7 @@ void populate_tide_table(tide_table *table, tidal_station *station, time_t base_
     time_t t0 = midnight - DAY_SECONDS;
     for(int i=0;i<3;i++)
     {
-        fill_day_tide_table(table->events[i], table->levels+i*24, station, t0); 
-        update_range(table->events[i], table->hw_low[i]);
+        fill_day_tide_table(table->events[i], table->levels+i*24, station, t0);         
         t0 += DAY_SECONDS; 
     }
     table->base_time = midnight;

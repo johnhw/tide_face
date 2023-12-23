@@ -168,12 +168,19 @@ def dump_station_years(station, min_year, max_year, constituents, min_amp,  prev
                             .n_constituents = {n_constituents},
                             .mean_error = {mean_error},
                         
-                    }};                                        
-                    tidal_station station_{c_name}_{min_year} = {{
-                            .type = STATION_TYPE_HARMONIC,
+                    }};                                
+        
+                    tidal_offset station_{c_name}_{min_year}_offset = {{
+                        .time_offset = 0.0f,
+                        .level_offset = 0.0f,
+                        .level_scale=1.0f,
+                    }};
+
+                    tidal_station station_{c_name}_{min_year} = {{                       
                             .name = station_{c_name}_{min_year}_name,
                             .previous = &{prev_name},
-                            .data = &station_{c_name}_{min_year}_data,                        
+                            .harmonic = &station_{c_name}_{min_year}_data,                        
+                            .offset = &station_{c_name}_{min_year}_offset,
                     }};
                     
 """), file=file)

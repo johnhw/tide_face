@@ -25,26 +25,15 @@
 // per day
 #define MAX_TIDE_EVENTS 6
 
-/* Station types */
-/* Empty station */
-#define STATION_TYPE_NONE 0
-/* Full harmonic station */
-#define STATION_TYPE_HARMONIC 1
-/* Offsets from a reference station, 
-including time + level shifts (secondary ports) */
-#define STATION_TYPE_OFFSET 2
-/* Station where we know a time offset from a reference station only */
-#define STATION_TYPE_OFFSET 3
 
 struct tidal_harmonic;
+
 /* Wrapper for a tidal station */
 typedef struct tidal_station
-{
-    uint8_t type;
+{    
     char *name;
-    struct tidal_offset *offset;  // at most one of offset or secondary is non-null
-    struct tidal_secondary *secondary;
-    struct tidal_harmonic *harmonic; //always non-null
+    struct tidal_offset *offset;  
+    struct tidal_harmonic *harmonic; 
     struct tidal_station *previous;
 } tidal_station;
 
@@ -54,19 +43,9 @@ typedef struct tidal_offset
 {
     float time_offset;
     float level_offset;
-    float level_scale;
-    struct tidal_harmonic *reference;
+    float level_scale;    
 } tidal_offset;
 
-/* Secondary port (UK admirality style) */
-typedef struct tidal_secondary
-{
-    uint32_t t1_a, t1_b, t2_a, t2_b; /* Time in seconds from midnight */
-    uint32_t hw_add_1, hw_add_2, lw_add_1, lw_add_2; /* Time shifts in seconds for HW/LW */
-    float mhws, mhwn; /* Mean high water springs/neaps at reference in metres */
-    float mhws_level, mhwn_level; /* Mean high water springs/neaps adjustment level in metres*/    
-    struct tidal_harmonic *reference;
-} tidal_secondary;
 
 typedef struct tidal_harmonic {
         uint8_t type;
@@ -109,15 +88,14 @@ typedef struct tide_table {
     time_t base_time; /* midnight on the day in question */
     tidal_station *station; /* tidal station */
     float levels[TIDE_TABLE_TIMES]; /* hourly tide levels */
-    tidal_event events[3][MAX_TIDE_EVENTS]; /* HW/LW events for yesterday, today, tomorrow */
-    float hw_low[3][2]; /* Min/max HW/LW levels for yesterday, today, tomorrow */
+    tidal_event events[3][MAX_TIDE_EVENTS]; /* HW/LW events for yesterday, today, tomorrow */    
 } tide_table;
 
-float find_tide_event_near(tidal_harmonic *station, tidal_event *event, time_t t0, time_t t1, float ntide);
+float find_tide_event_near(tidal_station *station, tidal_event *event, time_t t0, time_t t1, float ntide);
 void populate_tide_table(tide_table *table, tidal_station *station, time_t base_time, int tz_hours, int tz_mins);
 float add_tide_event(tidal *station, time_t t, tidal_event *event, tidal_event *events, float last_tide);
 void fill_day_tide_table(tidal_event *events, float *levels, tidal_station *station, time_t t0);
-float predict_tide(time_t t, tidal_harmonic *h_station, int d);
+float predict_tide(time_t t, tidal_station *h_station, int d);
 void test_tides(tidal_station *station, time_t *times, float *levels);
 void get_tide_events_near(time_t t, tide_table *table, tidal_event **prev, tidal_event **next);
 float interpolate_tide_table(time_t t, tide_table *table);
