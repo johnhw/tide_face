@@ -108,14 +108,34 @@ def make_c_name(name):
     c_name = re.sub(r"_+", "_", c_name)
     return c_name
 
-def dump_clock_station(constituents, prev_name=None, file=None):
+def dump_clock_station(constituents, file=None):
     # create a fake station with a single constituent, M2, with amplitude 1.0 and phase 0.0
     clock_station = {"name":"CLOCK", "lat":0.0, "lon":0.0, "offset":0.0, "units":"meters", "zone_offset":0.0, "constituents":{"M2":{"amp":1.0, "phase":0.0}}}
     clock_constituents = {"M2":constituents["M2"]}    
     # theoretically only valid for 2000 and 2001, but we don't care
-    return dump_station_years(clock_station, 2000, 2001, clock_constituents, 0.0, prev_name, file=file)
+    return dump_station_years(clock_station, 2000, 2001, clock_constituents, 0.0, file=file)
 
-def dump_station_years(station, min_year, max_year, constituents, min_amp,  prev_name=None, include_tests=True, file=None):
+def dump_station_offset(name, reference_station_name,  time_offset, level_offset, level_scale, prev_name=None, file=None):
+    prev_name = prev_name if prev_name is not None else "NULL"
+    print(dedent(f"""
+                    tidal_offset station_{name}_offset = {{
+                        .time_offset = {time_offset:.0f},
+                        .level_offset = {level_offset:.5f},
+                        .level_scale= {level_scale:.5f},
+                    }};
+
+                    tidal_station station_{name} = {{                       
+                            .name = station_{reference_station_name}_name,
+                            .previous = &{prev_name},
+                            .harmonic = &station_{reference_station_name}_data,                        
+                            .offset = &station_{name}_offset,
+                    }};
+        """), file=file)
+    return f"station_{name}"
+    
+    
+
+def dump_station_years(station, min_year, max_year, constituents, min_amp,  include_tests=True, file=None):
     name = station["name"]
     c_name = make_c_name(name)
     
@@ -146,7 +166,7 @@ def dump_station_years(station, min_year, max_year, constituents, min_amp,  prev
     phases = get_seq(16, MAX_PHASE, phases)
     speeds = float_seq(speeds)
 
-    prev_name = prev_name if prev_name is not None else "NULL"
+    
     speed_name = f"station_{c_name}_{min_year}_speed"
     print(dedent(f"""                 
                     /* Mean error for {name} in {min_year}-{max_year} is approximately {mean_error:.5f}m */
@@ -168,21 +188,7 @@ def dump_station_years(station, min_year, max_year, constituents, min_amp,  prev
                             .n_constituents = {n_constituents},
                             .mean_error = {mean_error},
                         
-                    }};                                
-        
-                    tidal_offset station_{c_name}_{min_year}_offset = {{
-                        .time_offset = 0.0f,
-                        .level_offset = 0.0f,
-                        .level_scale=1.0f,
-                    }};
-
-                    tidal_station station_{c_name}_{min_year} = {{                       
-                            .name = station_{c_name}_{min_year}_name,
-                            .previous = &{prev_name},
-                            .harmonic = &station_{c_name}_{min_year}_data,                        
-                            .offset = &station_{c_name}_{min_year}_offset,
-                    }};
-                    
+                    }};                                                    
 """), file=file)
     
     if include_tests:
@@ -193,7 +199,8 @@ def dump_station_years(station, min_year, max_year, constituents, min_amp,  prev
                     #endif
                 """), file=file)    
     
-    return  f"station_{c_name}_{min_year}"
+    station_data = {"name":f"station_{c_name}_{min_year}", "mean_error":mean_error, "neaps_range":neaps_range, "springs_range":springs_range, "offset":station["offset"]}
+    return station_data
 
 
 

@@ -41,7 +41,7 @@ typedef struct tidal_station
 /* Also used for CLOCK stations */
 typedef struct tidal_offset
 {
-    float time_offset;
+    time_t time_offset;
     float level_offset;
     float level_scale;    
 } tidal_offset;

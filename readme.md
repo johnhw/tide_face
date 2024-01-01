@@ -132,5 +132,9 @@ usage: extract_tides.py [-h] [--years YEARS] [--stations STATIONS]
                         [--output OUTPUT]
 ```                
 
+## License
+
+This software is licensed under the MIT license. See `LICENSE` for details. The script to convert `xtide`-format tcd files to JSON is licensed under the GPL v2.0 license as it is based on the `libtcd` headers. See `tcd_extract/LICENSE` for details.
+
 ## Warning
-This software is not suitable for navigation purposes. Always check tidal information from official sources. There may be errors in the software, and the data may be out of date. The software is provided as-is, with no warranty of any kind. Use at your own risk. You can verify the tidal data against `xtide` or external sources if you wish (see "viewing debug information") but any tests only show that the specific times in question are correct, not that the software is correct in general.
+This software is not suitable for navigation purposes. Always check tidal information from official Admirality sources. There may be errors in the software, and the data may be out of date. The software is provided as-is, with no warranty of any kind. Use at your own risk. You can verify the tidal data against `xtide` or external sources if you wish (see "viewing debug information") but any tests only show that the specific times in question are correct, not that the software is correct in general.
