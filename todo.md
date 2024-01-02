@@ -1,3 +1,5 @@
 * Add the UIs
-* Add parsing of arguments for adjusted ports
-* Add aliases for stations
+* Fix parsing for multiple stations
+* Improve tests
+* Check clock mode
+* add clock ui

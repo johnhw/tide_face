@@ -32,7 +32,8 @@ def cli(input_file, stations, years, base_year, min_amplitude, output_file):
         base_year = time.gmtime()[0]
         log.warning(f"No base year specified, using current year ({base_year})")
         
-    log.info(f"Extracting data from {input_file} to {output_file} for {base_year} to {base_year+years}")
+    log.info(f"Extracting data from '{input_file}' to '{output_file}' for {base_year} to {base_year+years}")
+    log.info(f"Minimum amplitude: {min_amplitude:.1e}")
 
     # load the data
     with open(input_file, "r") as f:
@@ -92,6 +93,7 @@ def cli(input_file, stations, years, base_year, min_amplitude, output_file):
         table.add_column("Level offset", justify="right", style="green")
         table.add_column("Level scale", justify="right", style="green")
         table.add_column("Time offset", justify="right", style="blue")
+
         # now write the offset stations as a linked list
         # using the names as aliases
         prev_name = None
@@ -102,7 +104,7 @@ def cli(input_file, stations, years, base_year, min_amplitude, output_file):
         print(table) 
         # now write all of the aliases/offsets
         finalise_tides(prev_name, file=f)
-    log.info(f"Finished writing {output_file}")
+    log.info(f"Finished writing '{output_file}'")
     
 
 if __name__=="__main__":
